@@ -34,3 +34,6 @@ tsconfig.tsbuildinfo
 
 # Temporary script outputs
 scripts/*.tmp.*
+
+# Design references
+ui_reference/
