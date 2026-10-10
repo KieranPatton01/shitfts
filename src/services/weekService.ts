@@ -4,7 +4,7 @@ import {
   setDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from './firebase';
+import { db, auth, isFirebaseConfigured } from './firebase';
 import { DayKey, ShiftType, TimeRange, WeekDocument, DayShiftData, PartnerSchedule } from '../types';
 import { getWeekDays } from '../utils/isoWeek';
 
@@ -212,6 +212,7 @@ export async function saveDayStatus(
     endDate: weekDays[6].dateStr,
     schedules: {
       [userName]: {
+        ...(auth.currentUser?.uid ? { ownerUid: auth.currentUser.uid } : {}),
         lastUpdatedAt: serverTimestamp(),
         days: {
           [dayKey]: dayPayload

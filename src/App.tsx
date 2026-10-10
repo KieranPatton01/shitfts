@@ -16,9 +16,21 @@ import {
 } from './utils/calendarMonth';
 import { todayDateStr } from './utils/shiftDisplay';
 import { subscribeToWeeks, saveDayStatus, subscribeToWeek, initializeEmptySchedule } from './services/weekService';
-import { getRecurringRules, applyRecurringRules } from './services/recurringService';
+import {
+  getRecurringRules,
+  applyRecurringRules,
+  syncRecurringRulesToCloud,
+  cacheRecurringRulesLocally
+} from './services/recurringService';
+import {
+  MemberProfile,
+  subscribeToMembers,
+  publishMyProfile,
+  pickPartner,
+  getScheduleDays
+} from './services/memberService';
 import { computeSynergy } from './utils/synergyEngine';
-import { WeekDocument, ShiftType, DayKey } from './types';
+import { WeekDocument, ShiftType, DayKey, DayShiftData, RecurringShiftRule } from './types';
 import { ParsedShiftResult } from './utils/rotaOcrParser';
 import { Header } from './components/Header';
 import { WeekView } from './components/WeekView';
@@ -148,40 +160,83 @@ export const App: React.FC = () => {
 
   const weekData = weeksMap[currentWeekId] || null;
 
-  // Partner name: whoever else has a schedule this week, else the other couple member
+  // Registered users (`users` collection) — lets us identify the partner by UID
+  const [members, setMembers] = useState<MemberProfile[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    return subscribeToMembers(setMembers);
+  }, [user]);
+
+  // Publish the exact name my shifts are stored under, so my partner can find them
+  useEffect(() => {
+    if (user?.uid && myName) void publishMyProfile(user.uid, myName);
+  }, [user?.uid, myName]);
+
+  // Keep my weekly pattern in sync between this device and the cloud
+  const myMember = members.find(m => m.uid === user?.uid);
+  const myCloudRules = myMember?.recurringRules;
+  useEffect(() => {
+    if (!user?.uid || !myMember) return;
+    const local = getRecurringRules(user.uid);
+    if (myCloudRules === undefined) {
+      // Pattern was created before cloud sync existed — upload it once
+      if (local.length > 0) void syncRecurringRulesToCloud(user.uid, local);
+    } else if (JSON.stringify(myCloudRules) !== JSON.stringify(local)) {
+      // Pattern was changed on another device — pull it down
+      cacheRecurringRulesLocally(user.uid, myCloudRules);
+      setRulesVersion(v => v + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid, myCloudRules, Boolean(myMember)]);
+
+  const loadedWeeks = useMemo(() => Object.values(weeksMap), [weeksMap]);
+  const partnerMember = useMemo(
+    () => (user ? pickPartner(members, user.uid, myName, loadedWeeks) : null),
+    [members, user, myName, loadedWeeks]
+  );
+
+  // Partner name: the other registered user; falls back to schedule keys I don't own
   const partnerName = useMemo(() => {
-    // Check current week schedules
-    const scheduleKeys = Object.keys(weekData?.schedules || {});
-    const otherKey = scheduleKeys.find(k => k.toLowerCase() !== myName.toLowerCase());
+    if (partnerMember) return partnerMember.scheduleName;
+
+    const me = myName.trim().toLowerCase();
+    const findOther = (doc: WeekDocument | null | undefined) =>
+      Object.keys(doc?.schedules || {}).find(k => {
+        if (k.trim().toLowerCase() === me) return false;
+        const owner = doc!.schedules[k]?.ownerUid;
+        return !owner || owner !== user?.uid;
+      });
+
+    const otherKey = findOther(weekData);
     if (otherKey) return otherKey;
 
-    // Check couple members
     if (couple?.memberDetails && user) {
       const otherUid = couple.members.find(uid => uid !== user.uid);
       const name = otherUid ? couple.memberDetails[otherUid]?.displayName : undefined;
       if (name) return name;
     }
 
-    // Check all loaded weeks for partner name
-    for (const doc of Object.values(weeksMap)) {
-      const keys = Object.keys(doc.schedules || {});
-      const pKey = keys.find(k => k.toLowerCase() !== myName.toLowerCase());
+    for (const doc of loadedWeeks) {
+      const pKey = findOther(doc);
       if (pKey) return pKey;
     }
 
     return 'Crush';
-  }, [weekData?.schedules, weeksMap, myName, couple, user]);
+  }, [partnerMember, weekData, loadedWeeks, myName, couple, user]);
 
   const isPaired = partnerName !== 'Partner' && partnerName !== 'Crush';
 
-  const rawMySchedule = weekData?.schedules?.[myName]?.days;
-  const rawPartnerDays = isPaired ? weekData?.schedules?.[partnerName]?.days : undefined;
+  const rawMySchedule = getScheduleDays(weekData, myName);
+  const rawPartnerDays = isPaired ? getScheduleDays(weekData, partnerName) : undefined;
 
   // Apply recurring rules automatically if not manually overridden for this week
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const myRules = useMemo(() => getRecurringRules(user?.uid || myName), [user?.uid, myName, rulesVersion]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const partnerRules = useMemo(() => getRecurringRules(partnerName), [partnerName, rulesVersion]);
+  // Partner's weekly pattern comes from their Firestore profile
+  const partnerRules = useMemo<RecurringShiftRule[]>(
+    () => partnerMember?.recurringRules ?? [],
+    [partnerMember]
+  );
 
   const effectiveMySchedule = useMemo(
     () => applyRecurringRules(rawMySchedule, myRules, days),
@@ -198,8 +253,8 @@ export const App: React.FC = () => {
   // Picker week data
   const pickerDays = useMemo(() => getWeekDays(pickerWeekId), [pickerWeekId]);
   const pickerWeekDoc = weeksMap[pickerWeekId] || null;
-  const rawPickerMy = pickerWeekDoc?.schedules?.[myName]?.days;
-  const rawPickerPartner = isPaired ? pickerWeekDoc?.schedules?.[partnerName]?.days : undefined;
+  const rawPickerMy = getScheduleDays(pickerWeekDoc, myName);
+  const rawPickerPartner = isPaired ? getScheduleDays(pickerWeekDoc, partnerName) : undefined;
 
   const effectivePickerMySchedule = useMemo(
     () => applyRecurringRules(rawPickerMy, myRules, pickerDays),
@@ -335,7 +390,7 @@ export const App: React.FC = () => {
   const handleCopyLastWeek = async (): Promise<number> => {
     if (!myName) return 0;
     const prevDoc = await fetchWeekOnce(getAdjacentWeek(currentWeekId, -1));
-    const prevDays = prevDoc.schedules?.[myName]?.days || {};
+    const prevDays: Partial<Record<DayKey, DayShiftData>> = getScheduleDays(prevDoc, myName) || {};
     const toCopy = Object.values(prevDays).filter(d => d?.status && !d.isRecurring);
     for (const d of toCopy) {
       await saveDayStatus(currentWeekId, myName, d.dayOfWeek, d.status, d.customHours, d.note);

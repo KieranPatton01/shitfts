@@ -9,6 +9,7 @@ import {
 } from '../utils/calendarMonth';
 import { getWeekDays, DAY_NAMES } from '../utils/isoWeek';
 import { applyRecurringRules } from '../services/recurringService';
+import { getScheduleDays } from '../services/memberService';
 import { computeSynergy } from '../utils/synergyEngine';
 import { todayDateStr, SHIFT_META, formatHoursShort } from '../utils/shiftDisplay';
 
@@ -85,8 +86,8 @@ export const MonthView: React.FC<MonthViewProps> = ({
       const weekDoc = weeksMap[weekId];
       const weekDays = getWeekDays(weekId);
 
-      const rawMy = weekDoc?.schedules?.[myName]?.days;
-      const rawPartner = isPaired ? weekDoc?.schedules?.[partnerName]?.days : undefined;
+      const rawMy = getScheduleDays(weekDoc, myName);
+      const rawPartner = isPaired ? getScheduleDays(weekDoc, partnerName) : undefined;
 
       const effectiveMy = applyRecurringRules(rawMy, myRules, weekDays);
       const effectivePartner = applyRecurringRules(rawPartner, partnerRules, weekDays);

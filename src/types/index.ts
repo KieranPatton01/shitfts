@@ -28,6 +28,7 @@ export interface RecurringShiftRule {
 }
 
 export interface PartnerSchedule {
+  ownerUid?: string;           // UID of the account that writes this schedule
   submitted: boolean;
   submittedAt: number | string | null;
   lastUpdatedAt: number | string;

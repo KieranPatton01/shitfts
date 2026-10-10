@@ -1,5 +1,7 @@
+import { doc, setDoc } from 'firebase/firestore';
 import { RecurringShiftRule, DayKey, DayShiftData } from '../types';
 import { DayInfo } from '../utils/isoWeek';
+import { db, auth, isFirebaseConfigured } from './firebase';
 
 const RECURRING_STORAGE_PREFIX = 'shitfts_recurring_rules_';
 const broadcast = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('shitfts_sync_channel') : null;
@@ -13,6 +15,28 @@ export function getRecurringRules(uid: string): RecurringShiftRule[] {
     console.error('Failed to load recurring rules:', err);
     return [];
   }
+}
+
+/**
+ * Pushes a user's recurring rules to Firestore (`users/{uid}.recurringRules`)
+ * so their partner's device can apply them too. No-op in local mock mode.
+ */
+export async function syncRecurringRulesToCloud(uid: string, rules: RecurringShiftRule[]): Promise<void> {
+  if (!isFirebaseConfigured || !uid || auth.currentUser?.uid !== uid) return;
+  try {
+    await setDoc(doc(db, 'users', uid), { recurringRules: rules }, { merge: true });
+  } catch (err) {
+    console.warn('Failed to sync recurring rules to Firestore:', err);
+  }
+}
+
+/**
+ * Replaces the locally cached rules with the copy from the cloud
+ * (used when the same account signs in on another device).
+ */
+export function cacheRecurringRulesLocally(uid: string, rules: RecurringShiftRule[]): void {
+  if (!uid) return;
+  localStorage.setItem(`${RECURRING_STORAGE_PREFIX}${uid}`, JSON.stringify(rules));
 }
 
 export function saveRecurringRule(
@@ -32,6 +56,7 @@ export function saveRecurringRule(
 
   const updated = [...filtered, newRule];
   localStorage.setItem(`${RECURRING_STORAGE_PREFIX}${uid}`, JSON.stringify(updated));
+  void syncRecurringRulesToCloud(uid, updated);
 
   broadcast?.postMessage({
     type: 'RECURRING_UPDATED',
@@ -45,6 +70,7 @@ export function deleteRecurringRule(uid: string, ruleId: string): void {
   const existing = getRecurringRules(uid);
   const updated = existing.filter(r => r.id !== ruleId);
   localStorage.setItem(`${RECURRING_STORAGE_PREFIX}${uid}`, JSON.stringify(updated));
+  void syncRecurringRulesToCloud(uid, updated);
 
   broadcast?.postMessage({
     type: 'RECURRING_UPDATED',

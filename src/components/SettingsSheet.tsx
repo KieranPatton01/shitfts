@@ -83,7 +83,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 
         <div className="text-center pt-2 pb-1">
           <p className="text-[11px] text-outline font-medium select-none">
-            Build 1.0.43
+            Build 1.0.44
           </p>
         </div>
       </div>
